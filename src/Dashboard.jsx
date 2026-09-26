@@ -6,7 +6,7 @@ export default function Dashboard({ onLogout, session }) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
-  const API_URL = 'http://localhost:8000';
+  const API_URL = 'https://api-extractor-runt.onrender.com';
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
