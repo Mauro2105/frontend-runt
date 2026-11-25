@@ -4,23 +4,39 @@ import axios from 'axios';
 export default function Dashboard({ onLogout, session }) {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [inputKey, setInputKey] = useState(0);
   const [message, setMessage] = useState({ type: '', text: '' });
 
   const API_URL = 'https://api-extractor-runt.onrender.com';
 
   const handleFileChange = (e) => {
-    setFile(e.target.files[0]);
+    setFile(e.target.files[0] || null);
     setMessage({ type: '', text: '' });
   };
 
-const handleDownload = async () => {
+  const handleDownload = async (delayMs = 0) => {
+    if (downloading) return;
+
+    setDownloading(true);
+    setMessage({
+      type: 'success',
+      text: 'Consultando base de datos y generando reporte Excel...'
+    });
+
     try {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+
       const response = await axios.get(`${API_URL}/descargar-excel/`, {
-        responseType: 'blob', // MANTENER: Vital para descargar archivos
+        responseType: 'blob',
+        timeout: 120000,
         headers: {
-          'Authorization': `Bearer ${session.access_token}` // AGREGAR: El carnet de seguridad
+          'Authorization': `Bearer ${session.access_token}`
         }
       });
+
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
@@ -28,17 +44,29 @@ const handleDownload = async () => {
       document.body.appendChild(link);
       link.click();
       link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      setMessage({
+        type: 'success',
+        text: 'Reporte Excel descargado correctamente con la información disponible.'
+      });
     } catch (error) {
       console.error("Detalle del error:", error);
-      setMessage({ 
-        type: 'error', 
-        text: 'Error al descargar el archivo consolidado.' });
+      const detail = error.code === 'ECONNABORTED'
+        ? 'La descarga tardó demasiado. Intenta nuevamente en unos segundos.'
+        : 'Error al descargar el archivo consolidado.';
+      setMessage({
+        type: 'error',
+        text: detail
+      });
+    } finally {
+      setDownloading(false);
     }
   };
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    if (!file) return;
+    if (!file || loading) return;
 
     setLoading(true);
     setMessage({ type: '', text: '' });
@@ -48,32 +76,48 @@ const handleDownload = async () => {
 
     try {
       const response = await axios.post(`${API_URL}/procesar-pdf/`, formData, {
-        headers: { 
-          'Content-Type': 'multipart/form-data', //Vital para enviar PDFs
-          'Authorization': `Bearer ${session.access_token}` // El carnet de seguridad
+        timeout: 180000,
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${session.access_token}`
         },
       });
-      
-      setFile(null);
-      document.getElementById('file-upload').value = ''; 
-      
-      setMessage({ type: 'success', text: 'Datos procesados correctamente. Generando reporte Excel...' });
-      await handleDownload();
 
+      const backendMsg = response.data?.message || '';
+      const esSegundoPlano = backendMsg.toLowerCase().includes('segundo plano');
+
+      setFile(null);
+      setInputKey((prev) => prev + 1);
+
+      if (esSegundoPlano) {
+        setMessage({
+          type: 'success',
+          text: `${backendMsg} Descargando el consolidado actual; si el PDF es extenso, los registros nuevos seguirán sumándose en los próximos minutos.`
+        });
+        await handleDownload(3000);
+      } else {
+        setMessage({
+          type: 'success',
+          text: 'Datos procesados correctamente. Generando reporte Excel...'
+        });
+        await handleDownload(1500);
+      }
     } catch (error) {
       console.error("Detalle del error:", error);
-      setMessage({ 
-        type: 'error', 
-        text: error.response?.data?.detail || 'Error de conexión con el servidor.' 
+      setMessage({
+        type: 'error',
+        text: error.response?.data?.detail || 'Error de conexión con el servidor.'
       });
     } finally {
       setLoading(false);
     }
   };
 
+  const busy = loading || downloading;
+
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
-      
+
       {/* Barra de Navegación Institucional */}
       <nav className="bg-blue-900 px-6 py-4 shadow-md">
         <div className="mx-auto flex max-w-5xl items-center justify-between">
@@ -86,9 +130,10 @@ const handleDownload = async () => {
               <p className="text-xs text-blue-200">Sistema Consolidado de Tránsito</p>
             </div>
           </div>
-          <button 
+          <button
             onClick={onLogout}
-            className="rounded border border-red-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-600 hover:border-red-600"
+            disabled={busy}
+            className="rounded border border-red-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-600 hover:border-red-600 disabled:opacity-50"
           >
             Cerrar Sesión
           </button>
@@ -97,11 +142,11 @@ const handleDownload = async () => {
 
       {/* Contenido Principal */}
       <main className="mx-auto mt-8 max-w-5xl px-6">
-        
+
         {message.text && (
           <div className={`mb-6 rounded-md border-l-4 p-4 text-sm font-medium shadow-sm ${
-            message.type === 'success' 
-              ? 'border-green-600 bg-green-50 text-green-800' 
+            message.type === 'success'
+              ? 'border-green-600 bg-green-50 text-green-800'
               : 'border-red-600 bg-red-50 text-red-800'
           }`}>
             {message.text}
@@ -109,7 +154,7 @@ const handleDownload = async () => {
         )}
 
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-          
+
           {/* Tarjeta de Carga */}
           <div className="rounded-xl border border-gray-200 bg-white p-8 shadow-sm transition hover:shadow-md">
             <div className="mb-6 flex items-center gap-3 border-b border-gray-100 pb-4">
@@ -118,25 +163,26 @@ const handleDownload = async () => {
               </div>
               <h2 className="text-lg font-bold text-gray-800">Procesar Documento</h2>
             </div>
-            
+
             <form onSubmit={handleUpload}>
               <label className="mb-2 block text-sm font-medium text-gray-700">Seleccione el reporte PDF</label>
               <input
+                key={inputKey}
                 id="file-upload"
                 type="file"
                 accept=".pdf"
                 onChange={handleFileChange}
-                disabled={loading}
+                disabled={busy}
                 className="mb-6 block w-full text-sm text-gray-500 file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-gray-100 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-gray-700 hover:file:bg-gray-200 disabled:opacity-50"
                 required
               />
               <button
                 type="submit"
-                disabled={!file || loading}
+                disabled={!file || busy}
                 className={`w-full rounded-md px-4 py-3 font-bold text-white shadow transition-all ${
-                  loading 
-                    ? 'cursor-not-allowed bg-orange-500 hover:bg-orange-600' 
-                    : 'bg-emerald-600 hover:bg-emerald-700 hover:shadow-md'
+                  loading
+                    ? 'cursor-not-allowed bg-orange-500 hover:bg-orange-600'
+                    : 'bg-emerald-600 hover:bg-emerald-700 hover:shadow-md disabled:opacity-50'
                 }`}
               >
                 {loading ? (
@@ -145,7 +191,7 @@ const handleDownload = async () => {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    Analizando (30-40s)...
+                    Analizando documento...
                   </span>
                 ) : (
                   'Extraer y Descargar'
@@ -162,16 +208,18 @@ const handleDownload = async () => {
               </div>
               <h2 className="text-lg font-bold text-gray-800">Base de Datos Histórica</h2>
             </div>
-            
+
             <p className="mb-6 flex-grow text-sm leading-relaxed text-gray-600">
               El sistema mantiene un registro seguro de todas las consultas previas en la base de datos central. Descargue aquí el consolidado general actualizado.
             </p>
-            
+
             <button
-              onClick={handleDownload}
-              className="w-full rounded-md border-2 border-blue-900 bg-white px-4 py-2.5 font-bold text-blue-900 transition hover:bg-blue-50"
+              type="button"
+              onClick={() => handleDownload(0)}
+              disabled={busy}
+              className="w-full rounded-md border-2 border-blue-900 bg-white px-4 py-2.5 font-bold text-blue-900 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Exportar Consolidado Completo
+              {downloading ? 'Generando Excel...' : 'Exportar Consolidado Completo'}
             </button>
           </div>
 
